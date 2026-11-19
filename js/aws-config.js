@@ -9,4 +9,5 @@ export const AWS_CONFIG = {
   domain: 'https://secondpour-884725728481.auth.us-east-2.amazoncognito.com',
   identityPoolId: 'us-east-2:136ef27b-b2b6-469c-9ed9-ef688ba44f46',
   bucket: 'secondpour-sync-884725728481',
+  aiUrl: 'https://vbr3p3hkk6ql65h4tt6yzpwr540jjkyw.lambda-url.us-east-2.on.aws/',
 };

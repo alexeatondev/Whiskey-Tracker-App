@@ -119,7 +119,7 @@ export async function handleRedirect() {
 }
 
 /** A valid Cognito ID token, refreshed when needed (the refresh token lasts a year). */
-async function idToken() {
+export async function getIdToken() {
   const t = load(TOKENS);
   if (!t) throw new AuthRequired('Not signed in.');
   if (t.id && t.expiresAt - Date.now() > 60_000) return t.id;
@@ -155,7 +155,7 @@ async function identityCall(target, body) {
 async function credentials(force = false) {
   const cached = load(CREDS, sessionStorage);
   if (!force && cached && cached.expiresAt - Date.now() > 5 * 60_000) return cached;
-  const token = await idToken();
+  const token = await getIdToken();
   const logins = { [`cognito-idp.${C.region}.amazonaws.com/${C.userPoolId}`]: token };
   const t = load(TOKENS) || {};
   let identityId = t.identityId;

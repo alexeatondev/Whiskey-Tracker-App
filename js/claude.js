@@ -1,9 +1,9 @@
-// Label recognition with Claude. Runs directly from the browser using the user's own API key,
-// which is stored only on this device.
-import Anthropic from '../vendor/anthropic-sdk.mjs';
+// Label recognition with Claude, through the Second Pour AI proxy (infra/ai-proxy.js).
+// The Anthropic API key lives only in AWS; the browser sends the photo plus the user's sign-in token.
+// The proxy fixes the model and token limit and enforces a monthly per-user quota.
 import { FLAVOR_TAGS } from './model.js';
-
-export const DEFAULT_MODEL = 'claude-opus-5-5';
+import { AWS_CONFIG } from './aws-config.js';
+import { getIdToken, isSignedIn, AuthRequired } from './aws.js';
 
 export const WHISKEY_TYPES = [
   'Bourbon',
@@ -66,65 +66,59 @@ If a field is not on the label and you don't reliably know it for this exact pro
 
 export class ClaudeError extends Error {}
 
-export async function identifyWhiskey({ apiKey, model, base64 }) {
-  if (!apiKey) throw new ClaudeError('Add your Anthropic API key in Settings to enable automatic label recognition.');
+const USAGE = 'wt.ai.usage';
 
-  const client = new Anthropic({
-    apiKey,
-    // This is a personal app: the key belongs to the user and never leaves their device except to call Anthropic.
-    dangerouslyAllowBrowser: true,
-    maxRetries: 2,
-  });
+/** True when label recognition can run: the proxy is configured and the user is signed in. */
+export const aiAvailable = () => Boolean(AWS_CONFIG && AWS_CONFIG.aiUrl && isSignedIn());
+export const aiConfigured = () => Boolean(AWS_CONFIG && AWS_CONFIG.aiUrl);
 
-  let response;
+/** Last known usage for this month ({ used, limit, month }) or null. */
+export function aiUsage() {
   try {
-    response = await client.beta.messages.create({
-      model: model || DEFAULT_MODEL,
-      max_tokens: 6000, // the JSON answer is ~600 tokens; this leaves room for thinking while capping cost
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
-      output_config: {
-        effort: 'medium',
-        format: { type: 'json_schema', schema: SCHEMA },
-      },
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
-          { type: 'text', text: PROMPT },
-        ],
-      }],
-    });
-  } catch (err) {
-    if (err instanceof Anthropic.AuthenticationError) {
-      throw new ClaudeError('Your API key was rejected. Check it in Settings.');
-    }
-    if (err instanceof Anthropic.PermissionDeniedError) {
-      throw new ClaudeError('This API key does not have access to that model.');
-    }
-    if (err instanceof Anthropic.RateLimitError) {
-      throw new ClaudeError('Rate limited by the API. Wait a moment and try again.');
-    }
-    if (err instanceof Anthropic.APIConnectionError) {
-      throw new ClaudeError('Could not reach the Anthropic API. Check your internet connection.');
-    }
-    if (err instanceof Anthropic.APIError) {
-      const msg = err.error?.error?.message || err.message;
-      throw new ClaudeError(`The API returned an error: ${msg}`);
-    }
-    throw err;
+    const u = JSON.parse(localStorage.getItem(USAGE) || 'null');
+    return u && u.month === new Date().toISOString().slice(0, 7) ? u : null;
+  } catch { return null; }
+}
+
+export async function identifyWhiskey({ base64 }) {
+  if (!aiConfigured()) throw new ClaudeError('Label recognition is not set up in this build.');
+  let token;
+  try {
+    token = await getIdToken();
+  } catch (e) {
+    if (e instanceof AuthRequired) throw new ClaudeError('Sign in (Settings → Account & sync) to use label recognition.');
+    throw new ClaudeError('Could not reach the sign-in service. Check your internet connection.');
   }
 
-  if (response.stop_reason === 'refusal') {
+  let res;
+  try {
+    res = await fetch(AWS_CONFIG.aiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ image: base64, prompt: PROMPT, schema: SCHEMA }),
+    });
+  } catch {
+    throw new ClaudeError('Could not reach the label reader. Check your internet connection.');
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (res.status === 401) throw new ClaudeError('Sign in again (Settings → Account & sync) to use label recognition.');
+    if (data.error === 'quota') {
+      try { localStorage.setItem(USAGE, JSON.stringify({ used: data.limit, limit: data.limit, month: new Date().toISOString().slice(0, 7) })); } catch { /* ignore */ }
+    }
+    throw new ClaudeError(data.message || `The label reader returned an error (${res.status}).`);
+  }
+  if (data.usage) {
+    try { localStorage.setItem(USAGE, JSON.stringify({ ...data.usage, month: new Date().toISOString().slice(0, 7) })); } catch { /* ignore */ }
+  }
+  if (data.stop_reason === 'refusal') {
     throw new ClaudeError('The model declined to analyze this photo. You can still fill in the details by hand.');
   }
-  if (response.stop_reason === 'max_tokens') {
+  if (data.stop_reason === 'max_tokens') {
     throw new ClaudeError('The response was cut off. Please try again.');
   }
-
-  const text = response.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
   try {
-    return JSON.parse(text);
+    return JSON.parse(data.text);
   } catch {
     throw new ClaudeError('Could not read the response from the model. Please try again.');
   }
