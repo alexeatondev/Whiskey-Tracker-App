@@ -1,6 +1,6 @@
 import * as db from './js/db.js';
 import { processPhoto } from './js/image.js';
-import { identifyWhiskey, ClaudeError, WHISKEY_TYPES, DEFAULT_MODEL } from './js/claude.js';
+import { identifyWhiskey, ClaudeError, WHISKEY_TYPES, aiAvailable, aiConfigured, aiUsage } from './js/claude.js';
 import { starsHTML, createStarInput, formatRating } from './js/stars.js';
 import {
   STATUSES, statusLabel, BOTTLE_STATES, SERVES, FLAVOR_GROUPS, newTasting, todayISO, lastTasted,
@@ -10,15 +10,13 @@ import * as sync from './js/sync.js';
 
 // ---------- Settings (stored on this device only) ----------
 const settings = {
-  get apiKey() { return safeGet('wt.apiKey') || ''; },
-  set apiKey(v) { safeSet('wt.apiKey', v); },
-  get model() { return safeGet('wt.model') || DEFAULT_MODEL; },
-  set model(v) { safeSet('wt.model', v); },
   get sort() { return safeGet('wt.sort') || 'recent'; },
   set sort(v) { safeSet('wt.sort', v); },
 };
 function safeGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function safeSet(k, v) { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch { /* ignore */ } }
+// Older versions stored a personal Anthropic API key on the device. AI now runs through the server, so remove it.
+safeSet('wt.apiKey', ''); safeSet('wt.model', '');
 
 // ---------- Fields (identity + notes) ----------
 const FIELDS = [
@@ -171,7 +169,7 @@ async function renderList() {
         <div class="big">🥃</div>
         <h2>Your shelf is empty</h2>
         <p>Tap <strong>Add Whiskey</strong> and snap a photo of a bottle.<br>The details will be filled in for you.</p>
-        ${settings.apiKey ? '' : '<p class="hint">Tip: add your Anthropic API key in <a href="#/settings">Settings</a> to turn on automatic label recognition.</p>'}
+        ${aiAvailable() || !aiConfigured() ? '' : '<p class="hint">Tip: sign in under <a href="#/settings">Settings</a> to turn on automatic label recognition.</p>'}
       </div>`;
     return;
   }
@@ -261,9 +259,9 @@ function renderAdd() {
     <div class="capture">
       <div class="panel">
         <h2>Snap the bottle</h2>
-        <p class="hint" style="margin:0 0 14px">Get the front label in frame and in focus. ${settings.apiKey
+        <p class="hint" style="margin:0 0 14px">Get the front label in frame and in focus. ${aiAvailable()
           ? 'The details will be read from the label automatically.'
-          : 'Automatic recognition is off until you add an API key in <a href="#/settings">Settings</a> — you can still save the photo and type the details.'}</p>
+          : 'Automatic recognition is off until you sign in under <a href="#/settings">Settings</a> — you can still save the photo and type the details.'}</p>
         <div class="btn-row">
           <button class="btn primary" id="takePhoto">${CAMERA_ICON}Take Photo</button>
           <button class="btn" id="choosePhoto">${PHOTO_ICON}Choose Photo</button>
@@ -301,12 +299,13 @@ async function handlePhoto(file) {
   } catch (err) {
     console.error(err);
     app.innerHTML = `<div class="capture"><div class="status error">Couldn't read that image. Try another photo.</div>
-      <button class="btn" onclick="location.hash='#/add'">Try again</button></div>`;
+      <button class="btn" id="tryAgain">Try again</button></div>`;
+    $('#tryAgain').addEventListener('click', () => go('#/add'));
     return;
   }
   draft = newDraft(processed);
   go('#/new');
-  if (settings.apiKey) runIdentify();
+  if (aiAvailable()) runIdentify();
 }
 
 async function runIdentify() {
@@ -315,7 +314,7 @@ async function runIdentify() {
   current.idState = { state: 'working' };
   updateIdentifyStatus();
   try {
-    const result = await identifyWhiskey({ apiKey: settings.apiKey, model: settings.model, base64: current.base64 });
+    const result = await identifyWhiskey({ base64: current.base64 });
     if (draft !== current) return; // user moved on
     if (!result.isWhiskey) {
       current.idState = { state: 'error', msg: "That doesn't look like a whiskey label. You can still fill in the details below." };
@@ -363,7 +362,7 @@ function updateIdentifyStatus() {
   box.className = `status${s.state === 'error' ? ' error' : ''}`;
   box.innerHTML = s.state === 'working'
     ? '<div class="spinner"></div>Reading the label…'
-    : `${esc(s.msg)}${s.state === 'error' && draft.base64 && settings.apiKey ? ' <button type="button" class="btn" id="retryId" style="padding:6px 10px;margin-left:auto">Retry</button>' : ''}`;
+    : `${esc(s.msg)}${s.state === 'error' && draft.base64 && aiAvailable() ? ' <button type="button" class="btn" id="retryId" style="padding:6px 10px;margin-left:auto">Retry</button>' : ''}`;
   const retry = $('#retryId');
   if (retry) retry.addEventListener('click', runIdentify);
 }
@@ -569,7 +568,7 @@ function renderEdit(existing) {
         let img = $('img', side);
         if (!img) { img = document.createElement('img'); img.alt = 'Bottle photo'; side.prepend(img); }
         img.src = blobUrl(newPhoto.image);
-        if (isNew && settings.apiKey) {
+        if (isNew && aiAvailable()) {
           const ok = confirm('Read the details from this new photo? Empty fields will be filled in.');
           if (ok) runIdentify();
         }
@@ -915,29 +914,22 @@ async function renderInsights() {
 // ---------- Settings ----------
 function renderSettings() {
   setChrome({ title: 'Settings', back: true, fab: false });
-  const key = settings.apiKey;
+  const usage = aiUsage();
+  const aiStatus = !aiConfigured()
+    ? 'Label recognition isn\'t set up in this build.'
+    : aiAvailable()
+      ? `✓ On.${usage ? ` ${usage.used} of ${usage.limit} label reads used this month.` : ''}`
+      : 'Sign in below to turn it on.';
   app.innerHTML = `
     <div style="max-width:640px;margin:0 auto">
+      <div class="panel" id="syncPanel"></div>
+
       <div class="panel">
         <h2>Label recognition</h2>
-        <p class="hint" style="margin:0 0 12px">Photos are read by Claude using your own Anthropic API key. Get one at
-          <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.
-          The key is saved only in this browser on this device and is sent only to Anthropic. Each photo costs roughly a cent or two.</p>
-        <div class="field">
-          <label for="apiKey">Anthropic API key</label>
-          <input id="apiKey" class="input" type="password" placeholder="sk-ant-…" value="${esc(key)}" autocomplete="off" spellcheck="false">
-        </div>
-        <div class="field" style="margin-top:12px">
-          <label for="model">Model</label>
-          <input id="model" class="input" value="${esc(settings.model)}" spellcheck="false">
-        </div>
-        <div class="btn-row" style="margin-top:14px">
-          <button class="btn primary" id="saveKey">Save</button>
-          ${key ? '<button class="btn danger" id="clearKey">Remove key</button>' : ''}
-        </div>
+        <p class="hint" style="margin:0 0 8px">Photos are read by Claude through your Second Pour account. Each signed-in person gets a monthly allowance of label reads.
+          Your photo is sent only for reading the label and isn't stored by the reader.</p>
+        <p style="margin:0">${esc(aiStatus)}</p>
       </div>
-
-      <div class="panel" id="syncPanel"></div>
 
       <div class="panel">
         <h2>Backup file</h2>
@@ -964,14 +956,6 @@ function renderSettings() {
       </div>
     </div>`;
 
-  $('#saveKey').addEventListener('click', () => {
-    settings.apiKey = $('#apiKey').value.trim();
-    settings.model = $('#model').value.trim() === DEFAULT_MODEL ? '' : $('#model').value.trim();
-    toast('Saved');
-    renderSettings();
-  });
-  const clear = $('#clearKey');
-  if (clear) clear.addEventListener('click', () => { settings.apiKey = ''; toast('Key removed'); renderSettings(); });
 
   $('#exportBtn').addEventListener('click', async () => {
     const btn = $('#exportBtn');
@@ -1024,13 +1008,13 @@ function renderSyncPanel() {
     body = '<p class="hint" style="margin:0">Cloud sync isn\'t set up in this build yet.</p>';
   } else if (!st.enabled) {
     body = `<p class="hint" style="margin:0 0 12px">Keep your collection, photos included, in step on all your devices.
-        It's stored in your private cloud folder, which only your sign-in can reach.</p>
-      <button class="btn primary" id="odConnect">Sign in to sync</button>`;
+        It's stored in your private cloud folder, which only your sign-in can reach. Signing in also turns on label recognition.</p>
+      <button class="btn primary" id="odConnect">Sign in</button>`;
   } else if (st.needsSignIn || !st.signedIn) {
     body = `<p class="status error" style="margin:0 0 12px">${esc(st.lastError || 'Sign in to keep syncing.')}</p>
       <div class="btn-row">
         <button class="btn primary" id="odConnect">Sign in again</button>
-        <button class="btn" id="odDisconnect">Turn off sync</button>
+        <button class="btn" id="odDisconnect">Sign out</button>
       </div>`;
   } else {
     const who = st.account && (st.account.username || st.account.name);
@@ -1038,19 +1022,19 @@ function renderSyncPanel() {
       <p class="hint" style="margin:0 0 12px">Last synced ${esc(ago(st.lastSync))}.${st.lastError ? ` <span style="color:var(--danger)">${esc(st.lastError)}</span>` : ''}</p>
       <div class="btn-row">
         <button class="btn" id="odSync" ${st.busy ? 'disabled' : ''}>Sync now</button>
-        <button class="btn" id="odDisconnect">Turn off sync</button>
+        <button class="btn" id="odDisconnect">Sign out</button>
       </div>`;
   }
-  box.innerHTML = `<h2>Cloud sync</h2>${body}`;
+  box.innerHTML = `<h2>Account &amp; sync</h2>${body}`;
   $('#odConnect')?.addEventListener('click', () => sync.connect());
   $('#odSync')?.addEventListener('click', async () => {
     const r = await sync.syncNow();
     if (r.ok) { toast(r.changed ? `Synced · ${r.changed} update${r.changed === 1 ? '' : 's'}` : 'Up to date'); }
   });
   $('#odDisconnect')?.addEventListener('click', () => {
-    if (!confirm('Turn off sync on this device? Your collection stays on this device and in the cloud.')) return;
+    if (!confirm('Sign out on this device? Sync and label recognition stop here; your collection stays on this device and in the cloud.')) return;
     sync.disconnect();
-    renderSyncPanel();
+    renderSettings();
   });
 }
 

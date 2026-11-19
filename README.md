@@ -24,7 +24,7 @@ Once GitHub Pages is enabled (see below), open the site URL:
 - **iPhone / iPad**: open it in Safari, tap **Share**, then **Add to Home Screen**. It then opens full-screen like a native app.
 - **Windows**: open it in Edge or Chrome and click the **Install** icon in the address bar.
 
-Then open **Settings** (the gear icon) and paste an Anthropic API key from <https://console.anthropic.com/settings/keys> to turn on label recognition. The key is stored only on that device. Each photo costs about a cent or two in API usage. Without a key the app still works, but you type the details in yourself.
+Then open **Settings** (the gear icon) → **Account & sync** → **Sign in**. Signing in turns on sync and label recognition. Accounts are invite-only. Label reads go through a server-side proxy, so no API key is ever stored in the app or on your device. Each person gets 50 reads a month. Without signing in the app still works, but you type the details in yourself.
 
 ## Your data
 
@@ -51,7 +51,11 @@ python3 -m http.server 8000   # then open http://localhost:8000
 | File | Purpose |
 | --- | --- |
 | `index.html`, `styles.css`, `app.js` | App shell, styling, views and routing |
-| `js/claude.js` | Label recognition via the Anthropic SDK, with structured JSON output |
+| `js/claude.js` | Label recognition through the AI proxy, with structured JSON output |
+| `infra/ai-proxy.js` | AI proxy Lambda: verifies sign-in, enforces the monthly quota, calls Anthropic with the server-held key |
+| `infra/build.sh` | Re-embeds the minified proxy into the CloudFormation template |
+| `tests/ai-proxy.cjs` | Unit tests for the proxy (auth, quota, limits) |
+| `SECURITY.md` | What is public, what is secret, and how to report a problem |
 | `js/model.js` | Data model v2: statuses, bottle details, tastings, flavor tags, migration, duplicate matching, CSV |
 | `js/db.js` | IndexedDB storage plus backup export/import, change events and deletion tombstones |
 | `js/aws.js` | Cognito sign-in (OAuth PKCE, no library), Identity Pool credentials, SigV4-signed S3 calls |
@@ -62,6 +66,5 @@ python3 -m http.server 8000   # then open http://localhost:8000
 | `js/image.js` | Photo orientation fix, resizing and JPEG compression |
 | `js/stars.js` | Half-star rating display and input |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Installable app and offline support |
-| `vendor/anthropic-sdk.mjs` | Browser bundle of `@anthropic-ai/sdk` |
 
 When you change app files, bump `VERSION` in `sw.js` so installed copies pick up the update.
