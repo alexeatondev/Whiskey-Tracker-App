@@ -54,6 +54,17 @@ Goal: make the data model match how people actually drink and collect.
 - [x] Browser smoke test of the full flow with a mocked Claude API (manual script for now; CI in M2)
 - [ ] Dev uses it for two weeks and logs friction
 
+### Personal POC track *(now — refine for Dev's own use before any launch work)*
+
+1. [ ] Merge M1 and use it daily for two weeks; keep a friction list
+2. [x] **Automatic sync between iPhone and PC through AWS (Cognito + S3)** ([D-004](decisions.md)), built and deployed Nov 19
+3. [ ] "Ask for more detail" on low-confidence label reads + back-label photo (C2, C5)
+4. [ ] Palate profile and "Will I like it?" once ~15–20 whiskeys are rated (P2, P3)
+5. [ ] Quick wins: pour picker (P4), share cards (S1), store-pick fields (M7)
+6. [ ] Automated browser tests in CI to protect the data model
+
+Launch-only work (consent screens, age gate, app-store wrapper, payments, rebrand) waits until Dev decides to go public.
+
 ### M2 — Palate *(next, ~3–4 weeks)*
 
 Goal: the app starts giving advice, not just storing notes.
@@ -75,9 +86,9 @@ Goal: the app starts giving advice, not just storing notes.
 
 Goal: remove the two blockers to other people using it.
 
-- Backend (recommended: Supabase for auth + Postgres + storage; alternative: Cloudflare Workers + D1 + R2)
-- Local-first sync: IndexedDB stays the source of truth on device; server replicates by `updatedAt` per record (the merge logic in `db.importAll` is the starting point)
-- Claude proxy endpoint with per-user quota, product-level cache, and a cheaper model tier for easy labels
+- Backend: extend the AWS setup already running for the personal phase ([D-004](decisions.md)). Open Cognito sign-up; the per-user S3 folders already keep each user's data separate. Add API Gateway + Lambda (+ DynamoDB if needed) for server-side features.
+- Local-first sync: already built. IndexedDB stays the source of truth on each device, and `js/sync.js` merges per record by `updatedAt`, with tombstones for deletions.
+- Claude proxy Lambda with per-user quota, product-level cache, and a cheaper model tier for easy labels (removes the bring-your-own key)
 - Settings: sign in with Apple / Google / email link; delete account and data (X3)
 
 ### M4 — Public beta *(~4 weeks)*

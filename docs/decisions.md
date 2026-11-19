@@ -111,6 +111,37 @@ Remaining steps are in [backlog.md](backlog.md).
 
 ---
 
+## D-004 · Sync for the personal phase — *Decided (Nov 19, 2026): AWS (Cognito + S3) in a dedicated "Second Pour" account*
+
+**Context:** Dev uses the app on an iPhone and a Windows PC. Manual backup export/import works but is easy to forget, doesn't carry deletions, and re-sends every photo each time.
+
+**Options considered:**
+1. **OneDrive app folder (built first, then dropped).** Microsoft no longer lets personal accounts register apps outside an Entra directory, so it would have needed an Azure tenant just to get a client ID.
+2. **Access DB / Excel in a shared folder.** Rejected. A browser app can't open either file from a phone, and both corrupt easily with concurrent writers.
+3. **AWS (chosen).** Dev already uses AWS and Cognito for another app. It is also the path to the M3 multi-user backend, so the work isn't thrown away.
+
+**Decision:** a separate member account, **Second Pour** (884725728481), in Dev's Alex-Eaton-Team AWS Organization, region **us-east-2**. Everything is defined in `infra/second-pour-sync.yaml` (stack `second-pour-sync`):
+- Cognito User Pool (Essentials). Public sign-up is off, and there is a single owner user. Sign-in uses the hosted UI with auth code + PKCE, and the refresh token lasts 365 days.
+- Cognito Identity Pool. It issues 1-hour credentials for an IAM role that can only read and write `private/<identity id>/*`.
+- Private S3 bucket: versioned (30-day undo), TLS-only, CORS limited to the GitHub Pages origin and localhost.
+- $1/month budget alert. All resources are tagged `project=second-pour`.
+
+We did not reuse the existing "Identity Delegated Admin" account. It administers sign-in for the whole org, so mixing app resources into it would widen its blast radius.
+
+**How sync works:** this part is unchanged from the OneDrive design.
+- `collection.json` holds every record (without photos) plus deletion tombstones.
+- Photos are stored once each as `photos/<photoId>.jpg` (+ `_t` thumbnail).
+- Each device merges per record: the newer `updatedAt` wins, and a deletion wins over older edits.
+- Uploads use S3 conditional writes (`If-Match` / `If-None-Match`) and retry on conflict.
+- Sync runs on launch, a few seconds after any change, when the app returns to the foreground, and when the connection comes back.
+- Requests are signed with SigV4 in `js/aws.js` (WebCrypto, no SDK). Tests check every signature against the official AWS signer.
+
+**Cost:** about $0.01–0.05/month at personal scale. The free tier covers Cognito up to 10k MAU.
+
+**Later (M3):** turn on self sign-up (plus Sign in with Apple/Google). The per-user folder design already isolates users. Move the Anthropic key behind a Lambda.
+
+---
+
 ## D-003 · Shareable tasting results — *Decided (Nov 19, 2026): share cards in M2, live sessions later*
 
 | Approach | What it is | Complexity | When |
