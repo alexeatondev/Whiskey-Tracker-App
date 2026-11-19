@@ -1,6 +1,7 @@
 // Label recognition with Claude. Runs directly from the browser using the user's own API key,
 // which is stored only on this device.
 import Anthropic from '../vendor/anthropic-sdk.mjs';
+import { FLAVOR_TAGS } from './model.js';
 
 export const DEFAULT_MODEL = 'claude-opus-5-5';
 
@@ -28,7 +29,7 @@ const SCHEMA = {
   additionalProperties: false,
   required: [
     'isWhiskey', 'name', 'distillery', 'type', 'country', 'region', 'age', 'abv', 'proof',
-    'caskFinish', 'mashBill', 'edition', 'description', 'nose', 'palate', 'finish', 'approxPrice', 'confidence',
+    'caskFinish', 'mashBill', 'edition', 'description', 'nose', 'palate', 'finish', 'flavors', 'approxPrice', 'confidence',
   ],
   properties: {
     isWhiskey: { type: 'boolean', description: 'True if the photo shows a whiskey/whisky bottle or label.' },
@@ -47,6 +48,11 @@ const SCHEMA = {
     nose: str('Typical nose / aroma notes, comma separated. Empty string if unknown.'),
     palate: str('Typical palate / taste notes, comma separated. Empty string if unknown.'),
     finish: str('Typical finish notes, comma separated. Empty string if unknown.'),
+    flavors: {
+      type: 'array',
+      items: { type: 'string', enum: FLAVOR_TAGS },
+      description: 'Up to 6 of the most characteristic flavor tags for this whiskey, most prominent first. Empty if unknown.',
+    },
     approxPrice: str('Approximate typical US retail price for a 750ml bottle, e.g. "$65". Empty string if unknown.'),
     confidence: { type: 'string', enum: ['high', 'medium', 'low'], description: 'How confident you are in the identification.' },
   },
@@ -54,7 +60,7 @@ const SCHEMA = {
 
 const PROMPT = `Identify the whiskey in this photo and fill in its details.
 
-Read everything legible on the label first (name, distillery, age, ABV/proof, batch or barrel numbers, cask notes) — the label is the source of truth for those fields. Then fill the remaining fields (style, region, mash bill, typical tasting notes, approximate price) from what you know about this specific product.
+Read everything legible on the label first (name, distillery, age, ABV/proof, batch or barrel numbers, cask notes) — the label is the source of truth for those fields. Then fill the remaining fields (style, region, mash bill, typical tasting notes, flavor tags, approximate price) from what you know about this specific product.
 
 If a field is not on the label and you don't reliably know it for this exact product, return an empty string rather than guessing. If you cannot tell exactly which expression it is, give your best identification and set confidence to "low".`;
 
@@ -74,7 +80,7 @@ export async function identifyWhiskey({ apiKey, model, base64 }) {
   try {
     response = await client.beta.messages.create({
       model: model || DEFAULT_MODEL,
-      max_tokens: 16000,
+      max_tokens: 6000, // the JSON answer is ~600 tokens; this leaves room for thinking while capping cost
       betas: ['server-side-fallback-2026-07-01'],
       fallbacks: 'default',
       output_config: {

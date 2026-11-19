@@ -1,4 +1,6 @@
 // IndexedDB storage for whiskeys. Photos are stored as Blobs alongside each record.
+// Records are normalized to the current data model on read, so older entries migrate lazily.
+import { normalize, SCHEMA_VERSION } from './model.js';
 const DB_NAME = 'whiskey-tracker';
 const DB_VERSION = 1;
 const STORE = 'whiskeys';
@@ -40,9 +42,9 @@ const wrap = (req) => new Promise((resolve, reject) => {
   req.onerror = () => reject(req.error);
 });
 
-export const getAll = () => tx('readonly', (s) => wrap(s.getAll()));
-export const get = (id) => tx('readonly', (s) => wrap(s.get(id)));
-export const put = (item) => tx('readwrite', (s) => wrap(s.put(item)));
+export const getAll = () => tx('readonly', (s) => wrap(s.getAll())).then((rows) => rows.map(normalize));
+export const get = (id) => tx('readonly', (s) => wrap(s.get(id))).then(normalize);
+export const put = (item) => tx('readwrite', (s) => wrap(s.put(normalize(item))));
 export const remove = (id) => tx('readwrite', (s) => wrap(s.delete(id)));
 
 export function newId() {
@@ -83,7 +85,7 @@ export async function exportAll() {
     if (item.thumb instanceof Blob) copy.thumb = await blobToDataUrl(item.thumb);
     out.push(copy);
   }
-  return { app: 'whiskey-tracker', version: 1, exportedAt: new Date().toISOString(), whiskeys: out };
+  return { app: 'whiskey-tracker', version: SCHEMA_VERSION, exportedAt: new Date().toISOString(), whiskeys: out };
 }
 
 // Merges: an incoming record replaces a local one with the same id only if it is newer.
