@@ -1,0 +1,219 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Second Pour - personal sync backend. Cognito sign-in (owner only), an Identity Pool that hands the
+  signed-in user short-lived credentials scoped to their own folder, a private S3 bucket, and a
+  $1/month budget alert. Everything is tagged project=second-pour.
+
+Parameters:
+  OwnerEmail:
+    Type: String
+    Description: Email for the app's only user (gets a temporary password) and for the budget alert.
+  AppUrl:
+    Type: String
+    Default: https://alexeatondev.github.io/Whiskey-Tracker-App/
+    Description: Where the app is hosted. Must end with a slash; used as the sign-in redirect.
+  AppOrigin:
+    Type: String
+    Default: https://alexeatondev.github.io
+    Description: The origin of AppUrl (scheme + host), allowed by the bucket's CORS rules.
+  LocalUrl:
+    Type: String
+    Default: http://localhost:8000/
+    Description: Local testing URL, also allowed to sign in.
+  BudgetLimitUsd:
+    Type: Number
+    Default: 1
+
+Resources:
+  # ---------- Sign-in ----------
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: secondpour-users
+      UserPoolTier: ESSENTIALS
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true   # personal phase: no public sign-up
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          TemporaryPasswordValidityDays: 7
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - { Name: verified_email, Priority: 1 }
+      DeletionProtection: ACTIVE
+      UserPoolTags:
+        project: second-pour
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      Domain: !Sub secondpour-${AWS::AccountId}
+
+  AppClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: secondpour-web
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false              # browser app: public client with PKCE
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email, profile]
+      SupportedIdentityProviders: [COGNITO]
+      CallbackURLs: [!Ref AppUrl, !Ref LocalUrl]
+      LogoutURLs: [!Ref AppUrl, !Ref LocalUrl]
+      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH]
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 365
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+
+  OwnerUser:
+    Type: AWS::Cognito::UserPoolUser
+    Properties:
+      UserPoolId: !Ref UserPool
+      Username: !Ref OwnerEmail
+      DesiredDeliveryMediums: [EMAIL]
+      UserAttributes:
+        - { Name: email, Value: !Ref OwnerEmail }
+        - { Name: email_verified, Value: 'true' }
+
+  # ---------- Short-lived AWS credentials for the signed-in user ----------
+  IdentityPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      IdentityPoolName: secondpour_identities
+      AllowUnauthenticatedIdentities: false
+      AllowClassicFlow: false
+      CognitoIdentityProviders:
+        - ClientId: !Ref AppClient
+          ProviderName: !GetAtt UserPool.ProviderName
+          ServerSideTokenCheck: true
+      IdentityPoolTags:
+        - { Key: project, Value: second-pour }
+
+  SyncRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: secondpour-sync-user
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Federated: cognito-identity.amazonaws.com }
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                cognito-identity.amazonaws.com:aud: !Ref IdentityPool
+              ForAnyValue:StringLike:
+                cognito-identity.amazonaws.com:amr: authenticated
+      Policies:
+        - PolicyName: own-folder-only
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadWriteOwnFolder
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub '${Bucket.Arn}/private/${!cognito-identity.amazonaws.com:sub}/*'
+              - Sid: ListOwnFolder
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt Bucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix: 'private/${cognito-identity.amazonaws.com:sub}/*'
+      Tags:
+        - { Key: project, Value: second-pour }
+
+  IdentityPoolRoles:
+    Type: AWS::Cognito::IdentityPoolRoleAttachment
+    Properties:
+      IdentityPoolId: !Ref IdentityPool
+      Roles:
+        authenticated: !GetAtt SyncRole.Arn
+
+  # ---------- Storage ----------
+  Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub secondpour-sync-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      VersioningConfiguration: { Status: Enabled }   # undo for accidental overwrites
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpiration: { NoncurrentDays: 30 }
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 }
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: [!Ref AppOrigin, http://localhost:8000]
+            AllowedMethods: [GET, PUT, HEAD, DELETE]
+            AllowedHeaders: ['*']
+            ExposedHeaders: [ETag]
+            MaxAge: 3600
+      Tags:
+        - { Key: project, Value: second-pour }
+
+  BucketTlsOnly:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt Bucket.Arn, !Sub '${Bucket.Arn}/*']
+            Condition: { Bool: { aws:SecureTransport: 'false' } }
+
+  # ---------- Cost guardrail ----------
+  Budget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: secondpour-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit: { Amount: !Ref BudgetLimitUsd, Unit: USD }
+      NotificationsWithSubscribers:
+        - Notification: { NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 100, ThresholdType: PERCENTAGE }
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref OwnerEmail }]
+        - Notification: { NotificationType: FORECASTED, ComparisonOperator: GREATER_THAN, Threshold: 100, ThresholdType: PERCENTAGE }
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref OwnerEmail }]
+
+Outputs:
+  AppConfig:
+    Description: Paste this into js/aws-config.js (none of these values are secrets).
+    Value: !Sub >-
+      {"region":"${AWS::Region}","userPoolId":"${UserPool}","clientId":"${AppClient}",
+      "domain":"https://${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com",
+      "identityPoolId":"${IdentityPool}","bucket":"${Bucket}"}
+  BucketName:
+    Value: !Ref Bucket
