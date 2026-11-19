@@ -44,8 +44,28 @@ const wrap = (req) => new Promise((resolve, reject) => {
 
 export const getAll = () => tx('readonly', (s) => wrap(s.getAll())).then((rows) => rows.map(normalize));
 export const get = (id) => tx('readonly', (s) => wrap(s.get(id))).then(normalize);
-export const put = (item) => tx('readwrite', (s) => wrap(s.put(normalize(item))));
-export const remove = (id) => tx('readwrite', (s) => wrap(s.delete(id)));
+// Change listeners (used by sync). `silent` writes come from sync itself and don't notify.
+const listeners = [];
+export const onChange = (fn) => { listeners.push(fn); };
+const notify = (silent) => { if (!silent) listeners.forEach((fn) => { try { fn(); } catch (e) { console.error(e); } }); };
+
+export const put = (item, { silent = false } = {}) =>
+  tx('readwrite', (s) => wrap(s.put(normalize(item)))).then((r) => { notify(silent); return r; });
+
+// Deletions leave a tombstone so other devices remove the record too.
+const TOMBSTONES = 'wt.tombstones';
+export function getTombstones() {
+  try { return JSON.parse(localStorage.getItem(TOMBSTONES) || '{}'); } catch { return {}; }
+}
+export function setTombstones(t) {
+  try { localStorage.setItem(TOMBSTONES, JSON.stringify(t)); } catch { /* ignore */ }
+}
+export const remove = (id, { silent = false } = {}) =>
+  tx('readwrite', (s) => wrap(s.delete(id))).then((r) => {
+    if (!silent) setTombstones({ ...getTombstones(), [id]: Date.now() });
+    notify(silent);
+    return r;
+  });
 
 export function newId() {
   return (crypto.randomUUID && crypto.randomUUID()) ||
