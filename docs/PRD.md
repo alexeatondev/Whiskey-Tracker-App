@@ -121,7 +121,7 @@ Priority: **P0** = needed for the next release, **P1** = needed before public la
 | D2 | Full JSON backup and merge import | P0 | ✅ Shipped |
 | D3 | CSV export (spreadsheet-friendly) | P0 | M1 |
 | D4 | Schema versioning with forward migrations; never drop unknown fields | P0 | M1 |
-| D5 | Accounts and automatic multi-device sync (local-first, server as replica) | P1 | |
+| D5 | Accounts and automatic multi-device sync (local-first, server as replica) | P1 | Personal phase: ✅ AWS Cognito + S3 sync in a dedicated account ([D-004](decisions.md)); same backend scales to multi-user in M3 |
 | D6 | Server-side AI proxy so users don't need their own API key; per-user quotas | P1 | |
 | D7 | Import from Distiller, OnlyDrams, Whiskybase CSV exports | P2 | |
 
@@ -177,11 +177,11 @@ For the public beta:
 
 ## 9. Technical approach
 
-**Now (personal):** keep the zero-build PWA (plain HTML/CSS/JS modules, IndexedDB, service worker, GitHub Pages). Claude is called from the browser with the user's own key. This is simple, free to host and fast to iterate.
+**Now (personal):** keep the zero-build PWA (plain HTML/CSS/JS modules, IndexedDB, service worker, GitHub Pages). Claude is called from the browser with the user's own key. This is simple, free to host and fast to iterate. Devices sync through a private AWS backend (Cognito + S3) in a dedicated Second Pour account.
 
 **Public (P1):** keep the PWA as the single front end and add:
 
-- A small backend (Supabase or Cloudflare Workers + D1/R2) for auth, sync and photo storage.
+- The AWS backend already running for the personal phase ([D-004](decisions.md)): Cognito for accounts, per-user S3 folders for sync and photos, plus Lambda for server-side features.
 - A server-side Claude proxy holding the API key, with per-user rate limits and response caching keyed by normalized product name, so the same bottle isn't identified twice across users.
 - Capacitor to wrap the PWA for the App Store and Play Store, with native camera and barcode plugins.
 
@@ -219,3 +219,4 @@ The platform recommendation and alternatives are covered in [roadmap.md](roadmap
 1. Pricing → D-001 decided: free core + Pro ($3.99/mo, $29.99/yr) + lifetime ($79.99).
 2. Name → D-002 decided: **Second Pour**, pending trademark and domain clearance.
 3. Sharing → D-003 decided: share cards in M2; live group tasting sessions after sync.
+4. Sync → D-004 decided: AWS Cognito + S3 in a separate "Second Pour" AWS account (us-east-2), live since Nov 19.
