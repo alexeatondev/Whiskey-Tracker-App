@@ -1,6 +1,6 @@
 // Offline support: cache the app shell so it opens without a connection.
 // Bump VERSION whenever app files change so devices pick up the update.
-const VERSION = 'wt-v2';
+const VERSION = 'wt-v4';
 const SHELL = [
   './',
   './index.html',
@@ -11,6 +11,9 @@ const SHELL = [
   './js/claude.js',
   './js/stars.js',
   './js/model.js',
+  './js/aws.js',
+  './js/aws-config.js',
+  './js/sync.js',
   './vendor/anthropic-sdk.mjs',
   './manifest.webmanifest',
   './icons/icon.svg',

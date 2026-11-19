@@ -6,6 +6,7 @@ import {
   STATUSES, statusLabel, BOTTLE_STATES, SERVES, FLAVOR_GROUPS, newTasting, todayISO, lastTasted,
   parseMoney, findDuplicates, toCSV,
 } from './js/model.js';
+import * as sync from './js/sync.js';
 
 // ---------- Settings (stored on this device only) ----------
 const settings = {
@@ -600,7 +601,7 @@ function renderEdit(existing) {
     const status = form.elements.status.value || 'tasted';
     const now = Date.now();
     const record = isNew
-      ? { id: db.newId(), createdAt: now, image: draft.image || null, thumb: draft.thumb || null, tastings: [] }
+      ? { id: db.newId(), createdAt: now, image: draft.image || null, thumb: draft.thumb || null, photoId: draft.image ? db.newId() : null, tastings: [] }
       : { ...existing };
     Object.assign(record, data, {
       status,
@@ -611,7 +612,7 @@ function renderEdit(existing) {
     });
     // A new entry rated on the spot starts its tasting log with today's tasting.
     if (isNew && status !== 'wishlist' && rating) record.tastings = [newTasting({ rating })];
-    if (newPhoto) { record.image = newPhoto.image; record.thumb = newPhoto.thumb; }
+    if (newPhoto) { record.image = newPhoto.image; record.thumb = newPhoto.thumb; record.photoId = db.newId(); }
     try {
       await db.put(record);
     } catch (err) {
@@ -936,11 +937,12 @@ function renderSettings() {
         </div>
       </div>
 
+      <div class="panel" id="syncPanel"></div>
+
       <div class="panel">
-        <h2>Backup &amp; move between devices</h2>
-        <p class="hint" style="margin:0 0 12px">Your collection is stored on each device. Export a backup file (photos included),
-          then import it on your other device — e.g. save to iCloud Drive or OneDrive from your iPhone and import on your PC.
-          Importing merges: newer edits win, nothing is deleted.</p>
+        <h2>Backup file</h2>
+        <p class="hint" style="margin:0 0 12px">Export everything (photos included) to a single file, or import one.
+          Useful as an extra copy even with cloud sync on. Importing merges: newer edits win, nothing is deleted.</p>
         <div class="btn-row">
           <button class="btn" id="exportBtn">Export backup</button>
           <button class="btn" id="importBtn">Import backup</button>
@@ -998,6 +1000,80 @@ function renderSettings() {
   });
 
   $('#importBtn').addEventListener('click', () => pickFile('#importInput'));
+
+  renderSyncPanel();
+  const off = sync.onStatus(() => { if ($('#syncPanel')) renderSyncPanel(); else off(); });
+}
+
+// ---------- Cloud sync (AWS) ----------
+function ago(ts) {
+  if (!ts) return 'never';
+  const s = Math.round((Date.now() - ts) / 1000);
+  if (s < 45) return 'just now';
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
+function renderSyncPanel() {
+  const box = $('#syncPanel');
+  if (!box) return;
+  const st = sync.status();
+  let body;
+  if (!st.configured) {
+    body = '<p class="hint" style="margin:0">Cloud sync isn\'t set up in this build yet.</p>';
+  } else if (!st.enabled) {
+    body = `<p class="hint" style="margin:0 0 12px">Keep your collection, photos included, in step on all your devices.
+        It's stored in your private cloud folder, which only your sign-in can reach.</p>
+      <button class="btn primary" id="odConnect">Sign in to sync</button>`;
+  } else if (st.needsSignIn || !st.signedIn) {
+    body = `<p class="status error" style="margin:0 0 12px">${esc(st.lastError || 'Sign in to keep syncing.')}</p>
+      <div class="btn-row">
+        <button class="btn primary" id="odConnect">Sign in again</button>
+        <button class="btn" id="odDisconnect">Turn off sync</button>
+      </div>`;
+  } else {
+    const who = st.account && (st.account.username || st.account.name);
+    body = `<p style="margin:0 0 4px">${st.busy ? '<span class="spinner inline"></span> Syncing…' : '✓ Sync is on'}${who ? ` · <span class="hint">${esc(who)}</span>` : ''}</p>
+      <p class="hint" style="margin:0 0 12px">Last synced ${esc(ago(st.lastSync))}.${st.lastError ? ` <span style="color:var(--danger)">${esc(st.lastError)}</span>` : ''}</p>
+      <div class="btn-row">
+        <button class="btn" id="odSync" ${st.busy ? 'disabled' : ''}>Sync now</button>
+        <button class="btn" id="odDisconnect">Turn off sync</button>
+      </div>`;
+  }
+  box.innerHTML = `<h2>Cloud sync</h2>${body}`;
+  $('#odConnect')?.addEventListener('click', () => sync.connect());
+  $('#odSync')?.addEventListener('click', async () => {
+    const r = await sync.syncNow();
+    if (r.ok) { toast(r.changed ? `Synced · ${r.changed} update${r.changed === 1 ? '' : 's'}` : 'Up to date'); }
+  });
+  $('#odDisconnect')?.addEventListener('click', () => {
+    if (!confirm('Turn off sync on this device? Your collection stays on this device and in the cloud.')) return;
+    sync.disconnect();
+    renderSyncPanel();
+  });
+}
+
+// Top-bar indicator: hidden until sync is on; shows busy / problem states.
+function updateSyncIndicator(st = sync.status()) {
+  const btn = $('#syncBtn');
+  if (!btn) return;
+  btn.hidden = !st.enabled;
+  btn.classList.toggle('busy', st.busy);
+  btn.classList.toggle('problem', Boolean(st.enabled && (st.needsSignIn || st.lastError)));
+  btn.setAttribute('aria-label', st.busy ? 'Syncing' : st.needsSignIn ? 'Sync sign-in needed' : st.lastError ? 'Sync problem' : `Synced ${ago(st.lastSync)}`);
+  btn.title = btn.getAttribute('aria-label');
+}
+$('#syncBtn').addEventListener('click', () => go('#/settings'));
+sync.onStatus(updateSyncIndicator);
+
+// Re-render after remote changes arrive, unless the user is in the middle of editing.
+function refreshAfterSync() {
+  const view = (location.hash || '#/').split('/')[1];
+  if (['add', 'new', 'edit'].includes(view)) return;
+  const tf = $('#tastingForm');
+  if (tf && !tf.hidden) return;
+  route();
 }
 
 $('#importInput').addEventListener('change', async (e) => {
@@ -1018,3 +1094,5 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => { /* offline support is optional */ });
 }
 route();
+updateSyncIndicator();
+sync.init({ onRemoteChange: refreshAfterSync, onMessage: toast }).then(() => { updateSyncIndicator(); refreshAfterSync(); });

@@ -13,6 +13,7 @@ Snap a photo of a bottle, have the details read from the label automatically, ra
 - **"Already have this?"**: after a label is read, the app spots likely duplicates and offers to log a tasting on the existing entry instead.
 - **Collection view**: status tabs, search, style and flavor filters, and sorting by newest, top rated, recently tasted, name, distillery or price paid.
 - **Insights**: your palate (flavors common in your favorites and your least favorites), ratings by style, top distilleries and top rated.
+- **Cloud sync**: sign in under Settings → Cloud sync and your collection, photos included, stays in step across your devices automatically. Data lives in a private S3 folder only your sign-in can reach (see `infra/`).
 - **Works offline**: browsing and rating work without a connection. Only label recognition needs internet.
 - **Backup and transfer**: export everything, photos included, to a single file and import it on another device, or export a CSV for spreadsheets.
 
@@ -27,7 +28,7 @@ Then open **Settings** (the gear icon) and paste an Anthropic API key from <http
 
 ## Your data
 
-Your collection is stored in the browser on each device (IndexedDB). To move it or keep devices in step, use **Settings → Export backup** on one device and **Import backup** on the other, for example by saving to iCloud Drive or OneDrive. Imports merge: the newer version of each entry wins and nothing is deleted.
+Your collection is stored in the browser on each device (IndexedDB). To move it or keep devices in step, use **Settings → Export backup** on one device and **Import backup** on the other, for example by saving to iCloud Drive or OneDrive, or turn on Cloud sync. Imports merge: the newer version of each entry wins and nothing is deleted.
 
 ## Deploying (GitHub Pages)
 
@@ -37,7 +38,7 @@ Your collection is stored in the browser on each device (IndexedDB). To move it 
 
 ## Product docs
 
-See [`docs/`](docs/): the [PRD](docs/PRD.md), [personas](docs/personas.md), [competitive analysis](docs/competitive-analysis.md) and [roadmap](docs/roadmap.md).
+See [`docs/`](docs/): [PRD](docs/PRD.md), [personas](docs/personas.md), [competitive analysis](docs/competitive-analysis.md), [roadmap](docs/roadmap.md), [decisions](docs/decisions.md), [brand strategy](docs/brand-strategy.md), [launch checklist](docs/launch-checklist.md) and [backlog](docs/backlog.md).
 
 ## Development
 
@@ -52,7 +53,12 @@ python3 -m http.server 8000   # then open http://localhost:8000
 | `index.html`, `styles.css`, `app.js` | App shell, styling, views and routing |
 | `js/claude.js` | Label recognition via the Anthropic SDK, with structured JSON output |
 | `js/model.js` | Data model v2: statuses, bottle details, tastings, flavor tags, migration, duplicate matching, CSV |
-| `js/db.js` | IndexedDB storage plus backup export/import |
+| `js/db.js` | IndexedDB storage plus backup export/import, change events and deletion tombstones |
+| `js/aws.js` | Cognito sign-in (OAuth PKCE, no library), Identity Pool credentials, SigV4-signed S3 calls |
+| `js/aws-config.js` | Non-secret IDs from the CloudFormation stack output |
+| `infra/second-pour-sync.yaml` | CloudFormation: Cognito, Identity Pool, IAM role, S3 bucket, budget |
+| `tests/aws-sync.cjs` | Two-device sync test with mocked Cognito/S3 and signature checks |
+| `js/sync.js` | Sync engine: merge, tombstones, photo upload/download, triggers |
 | `js/image.js` | Photo orientation fix, resizing and JPEG compression |
 | `js/stars.js` | Half-star rating display and input |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Installable app and offline support |

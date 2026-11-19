@@ -271,3 +271,10 @@ a.btn.primary { color: var(--accent-ink); }
 @media (max-width: 859px) { .side img { max-height: 34vh; object-fit: contain; } }
 .field .seg-btn { text-transform: none; letter-spacing: 0; font-size: .95rem; }
 .field .seg-btn:has(input:checked) { color: var(--text); }
+
+/* ---------- v3: OneDrive sync ---------- */
+.sync-btn { position: relative; }
+.sync-btn.busy svg { animation: pulse 1.2s ease-in-out infinite; }
+.sync-btn.problem::after { content: ''; position: absolute; top: 8px; right: 8px; width: 8px; height: 8px; border-radius: 50%; background: #ff6b5e; }
+@keyframes pulse { 50% { opacity: .35; } }
+.spinner.inline { display: inline-block; width: 14px; height: 14px; border-width: 2px; vertical-align: -2px; margin-right: 4px; }
